@@ -36,7 +36,7 @@ COPY components/ingress/. ./components/ingress
 
 WORKDIR /build/components/ingress
 
-RUN CGO_ENABLED=0 go build \
+RUN go build \
     -ldflags "-X 'github.com/alibaba/opensandbox/internal/version.Version=${VERSION}' \
               -X 'github.com/alibaba/opensandbox/internal/version.BuildTime=${BUILD_TIME}' \
               -X 'github.com/alibaba/opensandbox/internal/version.GitCommit=${GIT_COMMIT}'" \

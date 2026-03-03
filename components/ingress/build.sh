@@ -38,6 +38,6 @@ docker buildx build \
   --build-arg VERSION="${VERSION}" \
   --build-arg GIT_COMMIT="${GIT_COMMIT}" \
   --build-arg BUILD_TIME="${BUILD_TIME}" \
-  --platform linux/amd64 \
+  --platform linux/amd64,linux/arm64 \
   --push \
   .
