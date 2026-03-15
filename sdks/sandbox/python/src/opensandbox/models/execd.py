@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class OutputMessage(BaseModel):
@@ -234,6 +234,27 @@ class RunCommandOpts(BaseModel):
         default=None,
         description="Maximum execution time; server will terminate the command when reached. If omitted, the server will not enforce any timeout.",
     )
+    uid: int | None = Field(
+        default=None,
+        ge=0,
+        description="Unix user ID used to run the command process.",
+    )
+    gid: int | None = Field(
+        default=None,
+        ge=0,
+        description="Unix group ID used to run the command process. Requires uid to be set.",
+    )
+    envs: dict[str, str] | None = Field(
+        default=None,
+        description="Environment variables injected into the command process.",
+    )
+
+    @model_validator(mode="after")
+    def validate_uid_gid_dependency(self) -> "RunCommandOpts":
+        """Ensure gid is not used without uid to match server contract."""
+        if self.gid is not None and self.uid is None:
+            raise ValueError("uid is required when gid is provided")
+        return self
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 

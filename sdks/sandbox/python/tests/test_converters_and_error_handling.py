@@ -160,6 +160,25 @@ def test_execution_converter_to_api_run_command_request() -> None:
         ).to_dict()
     )
 
+    api4 = ExecutionConverter.to_api_run_command_request(
+        "id",
+        RunCommandOpts(
+            uid=1000,
+            gid=1000,
+            envs={"APP_ENV": "test", "LOG_LEVEL": "debug"},
+        ),
+    )
+    d4 = api4.to_dict()
+    assert d4["uid"] == 1000
+    assert d4["gid"] == 1000
+    assert d4["envs"] == {"APP_ENV": "test", "LOG_LEVEL": "debug"}
+    assert "cwd" not in d4
+
+
+def test_run_command_opts_validates_gid_requires_uid() -> None:
+    with pytest.raises(ValueError, match="uid is required when gid is provided"):
+        RunCommandOpts(gid=1000)
+
 
 def test_filesystem_and_metrics_converters() -> None:
     from datetime import datetime, timezone

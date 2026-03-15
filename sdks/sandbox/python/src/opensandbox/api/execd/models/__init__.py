@@ -32,6 +32,7 @@ from .replace_content_body import ReplaceContentBody
 from .replace_file_content_item import ReplaceFileContentItem
 from .run_code_request import RunCodeRequest
 from .run_command_request import RunCommandRequest
+from .run_command_request_envs import RunCommandRequestEnvs
 from .server_stream_event import ServerStreamEvent
 from .server_stream_event_error import ServerStreamEventError
 from .server_stream_event_results import ServerStreamEventResults
@@ -55,6 +56,7 @@ __all__ = (
     "ReplaceFileContentItem",
     "RunCodeRequest",
     "RunCommandRequest",
+    "RunCommandRequestEnvs",
     "ServerStreamEvent",
     "ServerStreamEventError",
     "ServerStreamEventResults",

@@ -817,6 +817,36 @@ class TestSandboxE2E:
         assert "log-line-2" in logs_text
 
     @pytest.mark.timeout(120)
+    @pytest.mark.order(3)
+    async def test_02b_run_command_with_envs(self):
+        """Test run_command env injection via RunCommandOpts.envs."""
+        await self._ensure_sandbox_created()
+        sandbox = TestSandboxE2E.sandbox
+
+        env_key = "OPEN_SANDBOX_E2E_CMD_ENV"
+        env_value = f"env-ok-{int(time.time())}"
+
+        # Baseline: variable should be empty when not injected.
+        baseline = await sandbox.commands.run(f"sh -c 'echo -n \"${{{env_key}}}\"'")
+        assert baseline.error is None
+        assert len(baseline.logs.stdout) == 1
+        assert baseline.logs.stdout[0].text == ""
+
+        # Inject environment variables for this command only.
+        injected = await sandbox.commands.run(
+            f"sh -c 'echo -n \"${{{env_key}}}\"'",
+            opts=RunCommandOpts(
+                envs={
+                    env_key: env_value,
+                    "OPEN_SANDBOX_E2E_SECOND_ENV": "second-ok",
+                }
+            ),
+        )
+        assert injected.error is None
+        assert len(injected.logs.stdout) == 1
+        assert injected.logs.stdout[0].text == env_value
+
+    @pytest.mark.timeout(120)
     @pytest.mark.order(4)
     async def test_03_basic_filesystem_operations(self):
         """Test basic filesystem operations."""
