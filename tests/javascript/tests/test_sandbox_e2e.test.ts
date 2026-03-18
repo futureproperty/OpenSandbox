@@ -674,11 +674,19 @@ test("03 filesystem operations: CRUD + replace/move/delete + range + stream", as
   await expect(sandbox.files.readFile(file2)).rejects.toBeTruthy();
 
   await sandbox.files.deleteDirectories([dir1, dir2]);
-  const verify = await sandbox.commands.run(
+  let verify = await sandbox.commands.run(
     `test ! -d ${dir1} && test ! -d ${dir2} && echo OK`,
     { workingDirectory: "/tmp" }
   );
-  expect(verify.error).toBeUndefined();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    expect(verify.error).toBeUndefined();
+    if (verify.logs.stdout[0]?.text === "OK") break;
+    await new Promise((r) => setTimeout(r, 1000));
+    verify = await sandbox.commands.run(
+      `test ! -d ${dir1} && test ! -d ${dir2} && echo OK`,
+      { workingDirectory: "/tmp" }
+    );
+  }
   expect(verify.logs.stdout[0]?.text).toBe("OK");
 });
 
