@@ -135,7 +135,8 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			continue
 		}
 		batchSandboxes = append(batchSandboxes, &batchSandbox)
-	} // Main reconciliation logic
+	}
+	log.Info("Pool reconcile", "pool", pool.Name, "pods", len(pods), "batchSandboxes", len(batchSandboxes))
 	return r.reconcilePool(ctx, pool, batchSandboxes, pods)
 }
 
@@ -152,24 +153,23 @@ func (r *PoolReconciler) reconcilePool(ctx context.Context, pool *sandboxv1alpha
 		}
 
 		// 2. Schedule and allocate
-		podAllocation, idlePods, supplySandbox, poolDirty, err := r.scheduleSandbox(ctx, latestPool, batchSandboxes, pods)
+		podAllocation, pendingSyncs, idlePods, supplySandbox, poolDirty, err := r.scheduleSandbox(ctx, latestPool, batchSandboxes, pods)
 		if err != nil {
 			return err
 		}
 
 		needReconcile := false
 		delay := time.Duration(0)
-		if supplySandbox > 0 && len(idlePods) > 0 { // Some idle pods may be pending, retry schedule later.
+		if supplySandbox > 0 && len(idlePods) > 0 {
 			needReconcile = true
 			delay = defaultRetryTime
 		}
-		if int32(len(idlePods)) >= supplySandbox { // Some pods may be pending, no need to create again.
+		if int32(len(idlePods)) >= supplySandbox {
 			supplySandbox = 0
 		} else {
 			supplySandbox -= int32(len(idlePods))
 		}
 
-		// 3. Persist allocation if needed (Update Annotations)
 		if poolDirty {
 			if err := r.Allocator.PersistPoolAllocation(ctx, latestPool, &AllocStatus{PodAllocation: podAllocation}); err != nil {
 				log.Error(err, "Failed to persist pool allocation")
@@ -177,12 +177,24 @@ func (r *PoolReconciler) reconcilePool(ctx context.Context, pool *sandboxv1alpha
 			}
 		}
 
-		// 4. Update revision and scale (Scaling involves Pod creation/deletion, not Pool CR update)
+		var syncErrs []error
+		for _, syncInfo := range pendingSyncs {
+			if err := r.Allocator.SyncSandboxAllocation(ctx, syncInfo.Sandbox, syncInfo.Pods); err != nil {
+				log.Error(err, "Failed to sync sandbox allocation", "sandbox", syncInfo.SandboxName)
+				syncErrs = append(syncErrs, fmt.Errorf("failed to sync sandbox %s: %w", syncInfo.SandboxName, err))
+			} else {
+				log.Info("Successfully assign Sandbox", "sandbox", syncInfo.SandboxName, "pods", syncInfo.Pods)
+			}
+		}
+		if len(syncErrs) > 0 {
+			return gerrors.Join(syncErrs...)
+		}
+
 		latestRevision, err := r.calculateRevision(latestPool)
 		if err != nil {
 			return err
 		}
-		latestIdlePods, deleteOld, supplyNew := r.updatePool(latestRevision, pods, idlePods)
+		latestIdlePods, deleteOld, supplyNew := r.updatePool(ctx, latestRevision, pods, idlePods)
 
 		args := &scaleArgs{
 			latestRevision: latestRevision,
@@ -197,7 +209,7 @@ func (r *PoolReconciler) reconcilePool(ctx context.Context, pool *sandboxv1alpha
 			return err
 		}
 
-		// 5. Update Status (using latestPool which has updated ResourceVersion)
+		// 6. Update Status
 		if err := r.updatePoolStatus(ctx, latestRevision, latestPool, pods, podAllocation); err != nil {
 			return err
 		}
@@ -295,15 +307,16 @@ func (r *PoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *PoolReconciler) scheduleSandbox(ctx context.Context, pool *sandboxv1alpha1.Pool, batchSandboxes []*sandboxv1alpha1.BatchSandbox, pods []*corev1.Pod) (map[string]string, []string, int32, bool, error) {
+func (r *PoolReconciler) scheduleSandbox(ctx context.Context, pool *sandboxv1alpha1.Pool, batchSandboxes []*sandboxv1alpha1.BatchSandbox, pods []*corev1.Pod) (map[string]string, []SandboxSyncInfo, []string, int32, bool, error) {
+	log := logf.FromContext(ctx)
 	spec := &AllocSpec{
 		Sandboxes: batchSandboxes,
 		Pool:      pool,
 		Pods:      pods,
 	}
-	status, poolDirty, err := r.Allocator.Schedule(ctx, spec)
+	status, pendingSyncs, poolDirty, err := r.Allocator.Schedule(ctx, spec)
 	if err != nil {
-		return nil, nil, 0, false, err
+		return nil, nil, nil, 0, false, err
 	}
 	idlePods := make([]string, 0)
 	for _, pod := range pods {
@@ -311,10 +324,12 @@ func (r *PoolReconciler) scheduleSandbox(ctx context.Context, pool *sandboxv1alp
 			idlePods = append(idlePods, pod.Name)
 		}
 	}
-	return status.PodAllocation, idlePods, status.PodSupplement, poolDirty, nil
+	log.Info("Schedule result", "pool", pool.Name, "allocated", len(status.PodAllocation),
+		"idlePods", len(idlePods), "supplement", status.PodSupplement, "pendingSyncs", len(pendingSyncs), "poolDirty", poolDirty)
+	return status.PodAllocation, pendingSyncs, idlePods, status.PodSupplement, poolDirty, nil
 }
 
-func (r *PoolReconciler) updatePool(latestRevision string, pods []*corev1.Pod, idlePods []string) ([]string, []string, int32) {
+func (r *PoolReconciler) updatePool(ctx context.Context, latestRevision string, pods []*corev1.Pod, idlePods []string) ([]string, []string, int32) {
 	podMap := make(map[string]*corev1.Pod)
 	for _, pod := range pods {
 		podMap[pod.Name] = pod
@@ -336,6 +351,10 @@ func (r *PoolReconciler) updatePool(latestRevision string, pods []*corev1.Pod, i
 			deleteOld = append(deleteOld, name)
 			supplyNew++
 		}
+	}
+	if len(deleteOld) > 0 {
+		logf.FromContext(ctx).Info("Rolling update detected", "latestRevision", latestRevision,
+			"outdatedPods", deleteOld, "supplyNew", supplyNew, "latestIdlePods", len(latestIdlePods))
 	}
 	return latestIdlePods, deleteOld, supplyNew
 }
@@ -379,9 +398,16 @@ func (r *PoolReconciler) scalePool(ctx context.Context, args *scaleArgs) error {
 		desiredTotalCnt = pool.Spec.CapacitySpec.PoolMax
 	}
 
+	log.Info("Scale pool decision", "pool", pool.Name,
+		"totalCnt", totalCnt, "allocatedCnt", allocatedCnt, "bufferCnt", bufferCnt,
+		"desiredBufferCnt", desiredBufferCnt, "supplyCnt", supplyCnt,
+		"desiredTotalCnt", desiredTotalCnt, "redundantPods", len(redundantPods),
+		"idlePods", len(args.idlePods))
+
 	if desiredTotalCnt > totalCnt { // Need to create pod
 		createCnt := desiredTotalCnt - totalCnt
-		for i := int32(0); i < createCnt; i++ {
+		log.Info("Scaling up pool", "pool", pool.Name, "createCnt", createCnt)
+		for range createCnt {
 			if err := r.createPoolPod(ctx, pool, args.latestRevision); err != nil {
 				log.Error(err, "Failed to create pool pod")
 				errs = append(errs, err)
@@ -393,9 +419,11 @@ func (r *PoolReconciler) scalePool(ctx context.Context, args *scaleArgs) error {
 			scaleIn = totalCnt - desiredTotalCnt
 		}
 		podsToDelete := r.pickPodsToDelete(pods, args.idlePods, args.redundantPods, scaleIn)
+		log.Info("Scaling down pool", "pool", pool.Name, "scaleIn", scaleIn, "redundantPods", len(redundantPods), "podsToDelete", len(podsToDelete))
 		for _, pod := range podsToDelete {
+			log.Info("Deleting pool pod", "pool", pool.Name, "pod", pod.Name)
 			if err := r.Delete(ctx, pod); err != nil {
-				log.Error(err, "Failed to delete pool pod")
+				log.Error(err, "Failed to delete pool pod", "pod", pod.Name)
 				errs = append(errs, err)
 			}
 		}
@@ -423,6 +451,9 @@ func (r *PoolReconciler) updatePoolStatus(ctx context.Context, latestRevision st
 	if equality.Semantic.DeepEqual(oldStatus, pool.Status) {
 		return nil
 	}
+	log := logf.FromContext(ctx)
+	log.Info("Update pool status", "ObservedGeneration", pool.Status.ObservedGeneration, "Total", pool.Status.Total,
+		"Allocated", pool.Status.Allocated, "Available", pool.Status.Available, "Revision", pool.Status.Revision)
 	if err := r.Status().Update(ctx, pool); err != nil {
 		return err
 	}
@@ -467,6 +498,7 @@ func (r *PoolReconciler) pickPodsToDelete(pods []*corev1.Pod, idlePodNames []str
 }
 
 func (r *PoolReconciler) createPoolPod(ctx context.Context, pool *sandboxv1alpha1.Pool, latestRevision string) error {
+	log := logf.FromContext(ctx)
 	pod, err := utils.GetPodFromTemplate(pool.Spec.Template, pool, metav1.NewControllerRef(pool, sandboxv1alpha1.SchemeBuilder.GroupVersion.WithKind("Pool")))
 	if err != nil {
 		return err
@@ -484,6 +516,7 @@ func (r *PoolReconciler) createPoolPod(ctx context.Context, pool *sandboxv1alpha
 		return err
 	}
 	PoolScaleExpectations.ExpectScale(controllerutils.GetControllerKey(pool), expectations.Create, pod.Name)
+	log.Info("Created pool pod", "pool", pool.Name, "pod", pod.Name, "revision", latestRevision)
 	r.Recorder.Eventf(pool, corev1.EventTypeNormal, "SuccessfulCreate", "Created pool pod: %v", pod.Name)
 	return nil
 }

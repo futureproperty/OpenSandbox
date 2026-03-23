@@ -186,20 +186,16 @@ type AllocStatus struct {
 	PodSupplement int32
 }
 
-// Allocator is responsible for managing pod allocation from Pool to BatchSandboxes.
-// It performs allocation calculations and persists the allocation state.
-type Allocator interface {
-	// Schedule computes the allocation of pods to BatchSandboxes based on the current pool state.
-	// It returns:
-	//   - AllocStatus: the computed allocation state (pod-to-sandbox mapping and required supplement count)
-	//   - poolDirty: indicates whether the Pool's allocation state has changed and needs persistence
-	//   - error: any error during the scheduling process
-	// This method only performs calculation and does not modify the Pool CR directly.
-	Schedule(ctx context.Context, spec *AllocSpec) (*AllocStatus, bool, error)
+type SandboxSyncInfo struct {
+	SandboxName string
+	Pods        []string
+	Sandbox     *sandboxv1alpha1.BatchSandbox
+}
 
-	// PersistPoolAllocation persists the allocation status.
-	// This method should be called after Schedule() when poolDirty is true.
+type Allocator interface {
+	Schedule(ctx context.Context, spec *AllocSpec) (*AllocStatus, []SandboxSyncInfo, bool, error)
 	PersistPoolAllocation(ctx context.Context, pool *sandboxv1alpha1.Pool, status *AllocStatus) error
+	SyncSandboxAllocation(ctx context.Context, sandbox *sandboxv1alpha1.BatchSandbox, pods []string) error
 }
 
 type defaultAllocator struct {
@@ -214,22 +210,24 @@ func NewDefaultAllocator(client client.Client) Allocator {
 	}
 }
 
-func (allocator *defaultAllocator) Schedule(ctx context.Context, spec *AllocSpec) (*AllocStatus, bool, error) {
+func (allocator *defaultAllocator) Schedule(ctx context.Context, spec *AllocSpec) (*AllocStatus, []SandboxSyncInfo, bool, error) {
 	log := logf.FromContext(ctx)
+	log.Info("Schedule started", "pool", spec.Pool.Name, "totalPods", len(spec.Pods), "sandboxes", len(spec.Sandboxes))
 	status, err := allocator.initAllocation(ctx, spec)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	availablePods := make([]string, 0)
 	for _, pod := range spec.Pods {
-		if _, ok := status.PodAllocation[pod.Name]; ok { // allocated
+		if _, ok := status.PodAllocation[pod.Name]; ok {
 			continue
 		}
-		if pod.Status.Phase != corev1.PodRunning { // not running
+		if pod.Status.Phase != corev1.PodRunning {
 			continue
 		}
 		availablePods = append(availablePods, pod.Name)
 	}
+	log.V(1).Info("Schedule init", "existingAllocations", len(status.PodAllocation), "availablePods", len(availablePods))
 	sandboxToPods := make(map[string][]string)
 	for podName, sandboxName := range status.PodAllocation {
 		sandboxToPods[sandboxName] = append(sandboxToPods[sandboxName], podName)
@@ -245,10 +243,25 @@ func (allocator *defaultAllocator) Schedule(ctx context.Context, spec *AllocSpec
 
 	poolDirty := poolDeallocate || poolAllocate
 
-	if err := allocator.syncAllocResult(ctx, dirtySandboxes, sandboxAlloc, spec.Sandboxes); err != nil {
-		log.Error(err, "sync alloc result failed")
+	// Build pending sync list instead of immediately syncing
+	var pendingSyncs []SandboxSyncInfo
+	if len(dirtySandboxes) > 0 {
+		sbxMap := make(map[string]*sandboxv1alpha1.BatchSandbox)
+		for _, sbx := range spec.Sandboxes {
+			sbxMap[sbx.Name] = sbx
+		}
+		for _, name := range dirtySandboxes {
+			if sbx, ok := sbxMap[name]; ok {
+				pendingSyncs = append(pendingSyncs, SandboxSyncInfo{
+					SandboxName: name,
+					Pods:        sandboxAlloc[name],
+					Sandbox:     sbx,
+				})
+			}
+		}
 	}
-	return status, poolDirty, nil // Do not return the error of sandboxes witch will block pool schedule.
+
+	return status, pendingSyncs, poolDirty, nil
 }
 
 func (allocator *defaultAllocator) initAllocation(ctx context.Context, spec *AllocSpec) (*AllocStatus, error) {
@@ -287,11 +300,13 @@ func (allocator *defaultAllocator) allocate(ctx context.Context, status *AllocSt
 }
 
 func (allocator *defaultAllocator) doAllocate(ctx context.Context, status *AllocStatus, sandboxToPods map[string][]string, availablePods []string, sbx *sandboxv1alpha1.BatchSandbox, cnt int32) ([]string, []string, bool, bool, error) {
+	log := logf.FromContext(ctx)
 	sandboxDirty := false
 	poolAllocate := false
 	sandboxAlloc := make([]string, 0)
 	remainAvailablePods := availablePods
 	if sbx.DeletionTimestamp != nil {
+		log.V(1).Info("Sandbox is being deleted, skip allocation", "sandbox", sbx.Name)
 		return sandboxAlloc, remainAvailablePods, false, false, nil
 	}
 	sbxAlloc, err := allocator.syncer.GetAllocation(ctx, sbx)
@@ -301,8 +316,8 @@ func (allocator *defaultAllocator) doAllocate(ctx context.Context, status *Alloc
 	remoteAlloc := sbxAlloc.Pods
 	allocatedPod := make([]string, 0)
 	allocatedPod = append(allocatedPod, remoteAlloc...)
-	name := sbx.Name
-	if localAlloc, ok := sandboxToPods[name]; ok {
+	sbxName := sbx.Name
+	if localAlloc, ok := sandboxToPods[sbxName]; ok {
 		for _, localPod := range localAlloc {
 			if !slices.Contains(remoteAlloc, localPod) {
 				sandboxDirty = true
@@ -310,7 +325,7 @@ func (allocator *defaultAllocator) doAllocate(ctx context.Context, status *Alloc
 			}
 		}
 	}
-	sandboxAlloc = append(sandboxAlloc, allocatedPod...) // old allocation
+	sandboxAlloc = append(sandboxAlloc, allocatedPod...)
 	needAllocateCnt := cnt - int32(len(allocatedPod))
 	canAllocateCnt := needAllocateCnt
 	if int32(len(availablePods)) < canAllocateCnt {
@@ -318,20 +333,33 @@ func (allocator *defaultAllocator) doAllocate(ctx context.Context, status *Alloc
 	}
 	pods := availablePods[:canAllocateCnt]
 	remainAvailablePods = availablePods[canAllocateCnt:]
-	sandboxToPods[name] = pods
+	sandboxToPods[sbxName] = pods
 	for _, pod := range pods {
+		if existingSandbox, exists := status.PodAllocation[pod]; exists {
+			if existingSandbox != sbxName {
+				log.Error(nil, "Pod already allocated to different sandbox, skipping",
+					"pod", pod, "currentSandbox", sbxName, "existingSandbox", existingSandbox)
+				continue
+			}
+			sandboxDirty = true
+			sandboxAlloc = append(sandboxAlloc, pod)
+			continue
+		}
 		sandboxDirty = true
-		status.PodAllocation[pod] = name
+		status.PodAllocation[pod] = sbxName
 		poolAllocate = true
-		sandboxAlloc = append(sandboxAlloc, pod) // new allocation
+		sandboxAlloc = append(sandboxAlloc, pod)
+		log.V(1).Info("Pod allocated to sandbox", "pod", pod, "sandbox", sbxName)
 	}
 	if canAllocateCnt < needAllocateCnt {
 		status.PodSupplement += needAllocateCnt - canAllocateCnt
+		log.Info("Insufficient pods for sandbox", "sandbox", sbxName, "need", needAllocateCnt, "available", canAllocateCnt, "supplement", needAllocateCnt-canAllocateCnt)
 	}
 	return sandboxAlloc, remainAvailablePods, sandboxDirty, poolAllocate, nil
 }
 
 func (allocator *defaultAllocator) deallocate(ctx context.Context, status *AllocStatus, sandboxToPods map[string][]string, sandboxes []*sandboxv1alpha1.BatchSandbox) (bool, error) {
+	log := logf.FromContext(ctx)
 	poolDeallocate := false
 	errs := make([]error, 0)
 	sbxMap := make(map[string]*sandboxv1alpha1.BatchSandbox)
@@ -347,14 +375,15 @@ func (allocator *defaultAllocator) deallocate(ctx context.Context, status *Alloc
 		}
 	}
 	// gc deleted sandbox and  batch sandbox
-	SandboxGC := make([]string, 0)
+	sbxGC := make([]string, 0)
 	for name := range sandboxToPods {
 		if _, ok := sbxMap[name]; !ok {
-			SandboxGC = append(SandboxGC, name)
+			sbxGC = append(sbxGC, name)
 		}
 	}
-	for _, name := range SandboxGC {
+	for _, name := range sbxGC {
 		pods := sandboxToPods[name]
+		log.Info("GC deleted sandbox allocation", "sandbox", name, "podCount", len(pods))
 		for _, pod := range pods {
 			delete(status.PodAllocation, pod)
 			poolDeallocate = true
@@ -365,6 +394,7 @@ func (allocator *defaultAllocator) deallocate(ctx context.Context, status *Alloc
 }
 
 func (allocator *defaultAllocator) doDeallocate(ctx context.Context, status *AllocStatus, sandboxToPods map[string][]string, sbx *sandboxv1alpha1.BatchSandbox) (bool, error) {
+	log := logf.FromContext(ctx)
 	deallocate := false
 	name := sbx.Name
 	allocatedPods, ok := sandboxToPods[name]
@@ -378,6 +408,7 @@ func (allocator *defaultAllocator) doDeallocate(ctx context.Context, status *All
 	for _, pod := range toRelease.Pods {
 		delete(status.PodAllocation, pod)
 		deallocate = true
+		log.V(1).Info("Pod released from sandbox", "pod", pod, "sandbox", name)
 	}
 	pods := make([]string, 0)
 	for _, pod := range allocatedPods {
@@ -402,31 +433,16 @@ func (allocator *defaultAllocator) getPodAllocation(ctx context.Context, pool *s
 }
 
 func (allocator *defaultAllocator) PersistPoolAllocation(ctx context.Context, pool *sandboxv1alpha1.Pool, status *AllocStatus) error {
+	log := logf.FromContext(ctx)
 	alloc := &PoolAllocation{}
 	alloc.PodAllocation = status.PodAllocation
+	log.Info("Persisting pool allocation", "pool", pool.Name, "allocations", len(status.PodAllocation))
 	return allocator.store.SetAllocation(ctx, pool, alloc)
 }
 
-func (allocator *defaultAllocator) syncAllocResult(ctx context.Context, dirtySandboxes []string, sandboxAlloc map[string][]string, sandboxes []*sandboxv1alpha1.BatchSandbox) error {
-	if len(dirtySandboxes) == 0 {
-		return nil
-	}
-	errs := make([]error, 0)
-	sbxMap := make(map[string]*sandboxv1alpha1.BatchSandbox)
-	for _, sbx := range sandboxes {
-		sbxMap[sbx.Name] = sbx
-	}
-	for _, name := range dirtySandboxes {
-		err := allocator.doSyncAllocResult(ctx, sandboxAlloc[name], sbxMap[name])
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return gerrors.Join(errs...)
-}
-
-func (allocator *defaultAllocator) doSyncAllocResult(ctx context.Context, allocatedPods []string, sbx *sandboxv1alpha1.BatchSandbox) error {
-	allocation := &SandboxAllocation{}
-	allocation.Pods = allocatedPods
-	return allocator.syncer.SetAllocation(ctx, sbx, allocation)
+func (allocator *defaultAllocator) SyncSandboxAllocation(ctx context.Context, sandbox *sandboxv1alpha1.BatchSandbox, pods []string) error {
+	log := logf.FromContext(ctx)
+	log.Info("Syncing sandbox allocation", "sandbox", sandbox.Name, "pods", pods)
+	allocation := &SandboxAllocation{Pods: pods}
+	return allocator.syncer.SetAllocation(ctx, sandbox, allocation)
 }

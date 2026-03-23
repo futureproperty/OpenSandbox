@@ -34,11 +34,14 @@ The egress control is implemented as a **Sidecar** that shares the network names
 ## Configuration
 
 - Policy bootstrap & runtime:
-  - Default deny-all. Seed initial policy via `OPENSANDBOX_EGRESS_RULES` (JSON, same shape as `/policy`); empty/`{}`/`null` stays deny-all.
+  - Default deny-all. Initial policy comes from **`OPENSANDBOX_EGRESS_RULES`** (JSON, same shape as `/policy`) unless a policy file wins; empty/`{}`/`null` in env stays deny-all.
+  - **`OPENSANDBOX_EGRESS_POLICY_FILE`** (optional): path to a JSON policy file on disk. **Startup:** if this variable is set and the file exists, is non-empty, and parses as valid policy, that file is used as the initial policy; otherwise initial policy is loaded from `OPENSANDBOX_EGRESS_RULES` (same when the variable is unset, or the file is missing, empty, or invalid—egress logs a warning and falls back to env).
+  - **Runtime:** if `OPENSANDBOX_EGRESS_POLICY_FILE` is set, a successful **`POST`**, **`PATCH`**, or **empty-body reset** on `/policy` updates that file to match the policy you just applied. If the variable is unset, the API does not write a policy file.
   - `/policy` at runtime; empty body resets to default deny-all.
 - HTTP service:
   - Listen address: `OPENSANDBOX_EGRESS_HTTP_ADDR` (default `:18080`).
   - Auth: `OPENSANDBOX_EGRESS_TOKEN` with header `OPENSANDBOX-EGRESS-AUTH: <token>`; if unset, endpoint is open.
+  - **Egress rule cap (POST/PATCH):** `OPENSANDBOX_EGRESS_MAX_RULES` (default `4096`). After parsing, `len(egress)` must not exceed this value; otherwise the API returns **413**. Set to **`0`** to disable the limit. Invalid or negative values fall back to the default. This applies only to **`POST /policy`** and **`PATCH /policy`**—not to initial policy loaded from `OPENSANDBOX_EGRESS_RULES` or `OPENSANDBOX_EGRESS_POLICY_FILE` at startup.
 - Mode (`OPENSANDBOX_EGRESS_MODE`, default `dns`):
   - `dns`: DNS proxy only, no nftables (IP/CIDR rules have no effect at L2).
   - `dns+nft`: enable nftables; if nft apply fails, fallback to `dns`. IP/CIDR enforcement and DoH/DoT blocking require this mode.
@@ -61,6 +64,7 @@ The egress control is implemented as a **Sidecar** that shares the network names
 ### Runtime HTTP API
 
 - Default listen address: `:18080` (override with `OPENSANDBOX_EGRESS_HTTP_ADDR`).
+- `POST`/`PATCH` enforce `OPENSANDBOX_EGRESS_MAX_RULES` on the resulting `egress` list (see [Configuration](#configuration)).
 - Endpoints:
 - `GET /policy` — returns the current policy.
 - `POST /policy` — replaces the policy. Empty/whitespace/`{}`/`null` resets to default deny-all.

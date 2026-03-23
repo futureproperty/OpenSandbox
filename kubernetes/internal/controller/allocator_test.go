@@ -296,10 +296,197 @@ func TestAllocatorSchedule(t *testing.T) {
 			syncer.EXPECT().GetAllocation(gomock.Any(), gomock.Any()).Return(c.sandboxAlloc, nil).Times(len(c.spec.Sandboxes))
 			syncer.EXPECT().SetAllocation(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 			syncer.EXPECT().GetRelease(gomock.Any(), gomock.Any()).Return(c.release, nil).Times(len(c.spec.Sandboxes))
-			status, _, err := allocator.Schedule(context.Background(), c.spec)
+			status, _, _, err := allocator.Schedule(context.Background(), c.spec)
 			assert.NoError(t, err)
 			assert.True(t, reflect.DeepEqual(c.wantStatus, status))
 		})
 	}
 
+}
+
+func TestScheduleReturnsPendingSyncs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	store := NewMockAllocationStore(ctrl)
+	syncer := NewMockAllocationSyncer(ctrl)
+	allocator := &defaultAllocator{
+		store:  store,
+		syncer: syncer,
+	}
+	replica1 := int32(1)
+
+	pods := []*corev1.Pod{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "pod1"},
+			Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "pod2"},
+			Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+	}
+	sandboxes := []*sandboxv1alpha1.BatchSandbox{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "sbx1"},
+			Spec:       sandboxv1alpha1.BatchSandboxSpec{Replicas: &replica1},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "sbx2"},
+			Spec:       sandboxv1alpha1.BatchSandboxSpec{Replicas: &replica1},
+		},
+	}
+	spec := &AllocSpec{
+		Pods:      pods,
+		Sandboxes: sandboxes,
+		Pool:      &sandboxv1alpha1.Pool{ObjectMeta: metav1.ObjectMeta{Name: "pool1"}},
+	}
+
+	store.EXPECT().GetAllocation(gomock.Any(), gomock.Any()).Return(&PoolAllocation{PodAllocation: map[string]string{}}, nil).Times(1)
+	syncer.EXPECT().GetAllocation(gomock.Any(), gomock.Any()).Return(&SandboxAllocation{Pods: []string{}}, nil).Times(2)
+	syncer.EXPECT().GetRelease(gomock.Any(), gomock.Any()).Return(&AllocationRelease{Pods: []string{}}, nil).Times(2)
+
+	status, pendingSyncs, poolDirty, err := allocator.Schedule(context.Background(), spec)
+
+	assert.NoError(t, err)
+	assert.True(t, poolDirty)
+	assert.Len(t, pendingSyncs, 2)
+	assert.Equal(t, "sbx1", pendingSyncs[0].SandboxName)
+	assert.Equal(t, "sbx2", pendingSyncs[1].SandboxName)
+	assert.Contains(t, status.PodAllocation, "pod1")
+	assert.Contains(t, status.PodAllocation, "pod2")
+}
+
+func TestSyncSandboxAllocation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	store := NewMockAllocationStore(ctrl)
+	syncer := NewMockAllocationSyncer(ctrl)
+	allocator := &defaultAllocator{
+		store:  store,
+		syncer: syncer,
+	}
+
+	sandbox := &sandboxv1alpha1.BatchSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sbx1"},
+	}
+	pods := []string{"pod1", "pod2"}
+
+	syncer.EXPECT().SetAllocation(gomock.Any(), sandbox, gomock.Any()).DoAndReturn(
+		func(ctx context.Context, sbx *sandboxv1alpha1.BatchSandbox, alloc *SandboxAllocation) error {
+			assert.Equal(t, pods, alloc.Pods)
+			return nil
+		}).Times(1)
+
+	err := allocator.SyncSandboxAllocation(context.Background(), sandbox, pods)
+	assert.NoError(t, err)
+}
+
+func TestDoAllocateIdempotency(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	store := NewMockAllocationStore(ctrl)
+	syncer := NewMockAllocationSyncer(ctrl)
+	allocator := &defaultAllocator{
+		store:  store,
+		syncer: syncer,
+	}
+	replica2 := int32(2)
+
+	pods := []*corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "pod1"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "pod2"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}},
+	}
+	sandboxes := []*sandboxv1alpha1.BatchSandbox{
+		{ObjectMeta: metav1.ObjectMeta{Name: "sbx1"}, Spec: sandboxv1alpha1.BatchSandboxSpec{Replicas: &replica2}},
+	}
+
+	poolAlloc := &PoolAllocation{
+		PodAllocation: map[string]string{
+			"pod1": "sbx1",
+		},
+	}
+	sandboxAlloc := &SandboxAllocation{Pods: []string{}}
+	release := &AllocationRelease{Pods: []string{}}
+
+	spec := &AllocSpec{
+		Pods:      pods,
+		Sandboxes: sandboxes,
+		Pool:      &sandboxv1alpha1.Pool{ObjectMeta: metav1.ObjectMeta{Name: "pool1"}},
+	}
+
+	store.EXPECT().GetAllocation(gomock.Any(), gomock.Any()).Return(poolAlloc, nil).Times(1)
+	syncer.EXPECT().GetAllocation(gomock.Any(), gomock.Any()).Return(sandboxAlloc, nil).Times(1)
+	syncer.EXPECT().GetRelease(gomock.Any(), gomock.Any()).Return(release, nil).Times(1)
+
+	status, pendingSyncs, _, err := allocator.Schedule(context.Background(), spec)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "sbx1", status.PodAllocation["pod1"])
+	assert.Equal(t, "sbx1", status.PodAllocation["pod2"])
+	assert.Len(t, pendingSyncs, 1)
+}
+
+func TestDoAllocateSkipsAlreadyAllocatedPod(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	store := NewMockAllocationStore(ctrl)
+	syncer := NewMockAllocationSyncer(ctrl)
+	allocator := &defaultAllocator{
+		store:  store,
+		syncer: syncer,
+	}
+	replica1 := int32(1)
+
+	pods := []*corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "pod1"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}},
+	}
+	sandboxes := []*sandboxv1alpha1.BatchSandbox{
+		{ObjectMeta: metav1.ObjectMeta{Name: "sbx1"}, Spec: sandboxv1alpha1.BatchSandboxSpec{Replicas: &replica1}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "sbx2"}, Spec: sandboxv1alpha1.BatchSandboxSpec{Replicas: &replica1}},
+	}
+
+	// Pod1 already allocated to sbx1
+	poolAlloc := &PoolAllocation{
+		PodAllocation: map[string]string{
+			"pod1": "sbx1",
+		},
+	}
+
+	spec := &AllocSpec{
+		Pods:      pods,
+		Sandboxes: sandboxes,
+		Pool:      &sandboxv1alpha1.Pool{ObjectMeta: metav1.ObjectMeta{Name: "pool1"}},
+	}
+
+	store.EXPECT().GetAllocation(gomock.Any(), gomock.Any()).Return(poolAlloc, nil).Times(1)
+	syncer.EXPECT().GetAllocation(gomock.Any(), gomock.Any()).Return(&SandboxAllocation{Pods: []string{"pod1"}}, nil).Times(1)
+	syncer.EXPECT().GetAllocation(gomock.Any(), gomock.Any()).Return(&SandboxAllocation{Pods: []string{}}, nil).Times(1)
+	syncer.EXPECT().GetRelease(gomock.Any(), gomock.Any()).Return(&AllocationRelease{Pods: []string{}}, nil).Times(2)
+
+	status, _, _, err := allocator.Schedule(context.Background(), spec)
+
+	assert.NoError(t, err)
+	// Pod1 should remain with sbx1
+	assert.Equal(t, "sbx1", status.PodAllocation["pod1"])
+}
+
+func TestSyncSandboxAllocationError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	store := NewMockAllocationStore(ctrl)
+	syncer := NewMockAllocationSyncer(ctrl)
+	allocator := &defaultAllocator{
+		store:  store,
+		syncer: syncer,
+	}
+
+	sandbox := &sandboxv1alpha1.BatchSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sbx1"},
+	}
+	pods := []string{"pod1"}
+
+	syncer.EXPECT().SetAllocation(gomock.Any(), sandbox, gomock.Any()).Return(assert.AnError).Times(1)
+
+	err := allocator.SyncSandboxAllocation(context.Background(), sandbox, pods)
+	assert.Error(t, err)
 }

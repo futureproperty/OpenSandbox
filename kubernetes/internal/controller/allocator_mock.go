@@ -156,16 +156,42 @@ func (m *MockAllocator) EXPECT() *MockAllocatorMockRecorder {
 }
 
 // Schedule mocks base method.
-func (m *MockAllocator) Schedule(ctx context.Context, spec *AllocSpec) (*AllocStatus, error) {
+func (m *MockAllocator) Schedule(ctx context.Context, spec *AllocSpec) (*AllocStatus, []SandboxSyncInfo, bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Schedule", ctx, spec)
 	ret0, _ := ret[0].(*AllocStatus)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret1, _ := ret[1].([]SandboxSyncInfo)
+	ret2, _ := ret[2].(bool)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
 }
 
 // Schedule indicates an expected call of Schedule.
 func (mr *MockAllocatorMockRecorder) Schedule(ctx, spec interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Schedule", reflect.TypeOf((*MockAllocator)(nil).Schedule), ctx, spec)
+}
+
+func (m *MockAllocator) PersistPoolAllocation(ctx context.Context, pool *v1alpha1.Pool, status *AllocStatus) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PersistPoolAllocation", ctx, pool, status)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+func (mr *MockAllocatorMockRecorder) PersistPoolAllocation(ctx, pool, status interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PersistPoolAllocation", reflect.TypeOf((*MockAllocator)(nil).PersistPoolAllocation), ctx, pool, status)
+}
+
+func (m *MockAllocator) SyncSandboxAllocation(ctx context.Context, sandbox *v1alpha1.BatchSandbox, pods []string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SyncSandboxAllocation", ctx, sandbox, pods)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+func (mr *MockAllocatorMockRecorder) SyncSandboxAllocation(ctx, sandbox, pods interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncSandboxAllocation", reflect.TypeOf((*MockAllocator)(nil).SyncSandboxAllocation), ctx, sandbox, pods)
 }
