@@ -139,6 +139,11 @@ class PortForwardService:
         try:
             state.server.close()
             await state.server.wait_closed()
+            # Close all active tunneled connections
+            for writer in list(state.active_connections):
+                with suppress(Exception):
+                    writer.close()
+                    await writer.wait_closed()
         finally:
             sandbox_registry = self._registry.get(sandbox_id)
             if sandbox_registry is not None:
