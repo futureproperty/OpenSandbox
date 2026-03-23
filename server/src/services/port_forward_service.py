@@ -279,14 +279,18 @@ class PortForwardService:
                 portforward_socket.settimeout(0.25)
         return portforward_client, portforward_socket
 
-    async def _copy_client_to_pod(self, reader: asyncio.StreamReader, portforward_socket: Any) -> None:
+    async def _copy_client_to_pod(
+        self, reader: asyncio.StreamReader, portforward_socket: Any
+    ) -> None:
         while True:
             chunk = await reader.read(65536)
             if not chunk:
                 return
             await asyncio.to_thread(portforward_socket.sendall, chunk)
 
-    async def _copy_pod_to_client(self, portforward_socket: Any, writer: asyncio.StreamWriter) -> None:
+    async def _copy_pod_to_client(
+        self, portforward_socket: Any, writer: asyncio.StreamWriter
+    ) -> None:
         while not writer.is_closing():
             chunk = await asyncio.to_thread(self._recv_from_socket, portforward_socket)
             if chunk is None:
@@ -302,7 +306,9 @@ class PortForwardService:
         except (TimeoutError, socket.timeout, BlockingIOError):
             return None
 
-    def _close_portforward_resources(self, portforward_socket: Any, portforward_client: Any) -> None:
+    def _close_portforward_resources(
+        self, portforward_socket: Any, portforward_client: Any
+    ) -> None:
         if portforward_socket is not None and hasattr(portforward_socket, "close"):
             with suppress(Exception):
                 portforward_socket.close()

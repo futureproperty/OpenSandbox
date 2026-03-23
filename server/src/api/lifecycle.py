@@ -73,6 +73,7 @@ sandbox_service = create_sandbox_service()
 # Sandbox CRUD Operations
 # ============================================================================
 
+
 @router.post(
     "/sandboxes",
     response_model=CreateSandboxResponse,
@@ -80,14 +81,22 @@ sandbox_service = create_sandbox_service()
     responses={
         202: {"description": "Sandbox creation accepted for asynchronous provisioning"},
         400: {"model": ErrorResponse, "description": "The request was invalid or malformed"},
-        401: {"model": ErrorResponse, "description": "Authentication credentials are missing or invalid"},
-        409: {"model": ErrorResponse, "description": "The operation conflicts with the current state"},
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication credentials are missing or invalid",
+        },
+        409: {
+            "model": ErrorResponse,
+            "description": "The operation conflicts with the current state",
+        },
         500: {"model": ErrorResponse, "description": "An unexpected server error occurred"},
     },
 )
 async def create_sandbox(
     request: CreateSandboxRequest,
-    x_request_id: Optional[str] = Header(None, alias="X-Request-ID", description="Unique request identifier for tracing"),
+    x_request_id: Optional[str] = Header(
+        None, alias="X-Request-ID", description="Unique request identifier for tracing"
+    ),
 ) -> CreateSandboxResponse:
     """
     Create a sandbox from a container image.
@@ -117,16 +126,27 @@ async def create_sandbox(
     responses={
         200: {"description": "Paginated collection of sandboxes"},
         400: {"model": ErrorResponse, "description": "The request was invalid or malformed"},
-        401: {"model": ErrorResponse, "description": "Authentication credentials are missing or invalid"},
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication credentials are missing or invalid",
+        },
         500: {"model": ErrorResponse, "description": "An unexpected server error occurred"},
     },
 )
 async def list_sandboxes(
-    state: Optional[List[str]] = Query(None, description="Filter by lifecycle state. Pass multiple times for OR logic."),
-    metadata: Optional[str] = Query(None, description="Arbitrary metadata key-value pairs for filtering (URL encoded)."),
+    state: Optional[List[str]] = Query(
+        None, description="Filter by lifecycle state. Pass multiple times for OR logic."
+    ),
+    metadata: Optional[str] = Query(
+        None, description="Arbitrary metadata key-value pairs for filtering (URL encoded)."
+    ),
     page: int = Query(1, ge=1, description="Page number for pagination"),
-    page_size: int = Query(20, ge=1, le=200, alias="pageSize", description="Number of items per page"),
-    x_request_id: Optional[str] = Header(None, alias="X-Request-ID", description="Unique request identifier for tracing"),
+    page_size: int = Query(
+        20, ge=1, le=200, alias="pageSize", description="Number of items per page"
+    ),
+    x_request_id: Optional[str] = Header(
+        None, alias="X-Request-ID", description="Unique request identifier for tracing"
+    ),
 ) -> ListSandboxesResponse:
     """
     List sandboxes with optional filtering and pagination.
@@ -148,6 +168,7 @@ async def list_sandboxes(
     metadata_dict = {}
     if metadata:
         from urllib.parse import parse_qsl
+
         try:
             # Parse query string format: key=value&key2=value2
             # strict_parsing=True rejects malformed segments like "a=1&broken"
@@ -155,18 +176,23 @@ async def list_sandboxes(
             metadata_dict = dict(parsed)
         except Exception as e:
             from fastapi import HTTPException
+
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "INVALID_METADATA_FORMAT", "message": f"Invalid metadata format: {str(e)}"}
+                detail={
+                    "code": "INVALID_METADATA_FORMAT",
+                    "message": f"Invalid metadata format: {str(e)}",
+                },
             )
 
     # Construct request object
     request = ListSandboxesRequest(
         filter=SandboxFilter(state=state, metadata=metadata_dict if metadata_dict else None),
-        pagination=PaginationRequest(page=page, pageSize=page_size)
+        pagination=PaginationRequest(page=page, pageSize=page_size),
     )
 
     import logging
+
     logger = logging.getLogger(__name__)
     logger.info("ListSandboxes: %s", request.filter)
 
@@ -179,15 +205,23 @@ async def list_sandboxes(
     response_model=Sandbox,
     responses={
         200: {"description": "Sandbox current state and metadata"},
-        401: {"model": ErrorResponse, "description": "Authentication credentials are missing or invalid"},
-        403: {"model": ErrorResponse, "description": "The authenticated user lacks permission for this operation"},
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication credentials are missing or invalid",
+        },
+        403: {
+            "model": ErrorResponse,
+            "description": "The authenticated user lacks permission for this operation",
+        },
         404: {"model": ErrorResponse, "description": "The requested resource does not exist"},
         500: {"model": ErrorResponse, "description": "An unexpected server error occurred"},
     },
 )
 async def get_sandbox(
     sandbox_id: str,
-    x_request_id: Optional[str] = Header(None, alias="X-Request-ID", description="Unique request identifier for tracing"),
+    x_request_id: Optional[str] = Header(
+        None, alias="X-Request-ID", description="Unique request identifier for tracing"
+    ),
 ) -> Sandbox:
     """
     Fetch a sandbox by id.
@@ -214,16 +248,27 @@ async def get_sandbox(
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
         204: {"description": "Sandbox successfully deleted"},
-        401: {"model": ErrorResponse, "description": "Authentication credentials are missing or invalid"},
-        403: {"model": ErrorResponse, "description": "The authenticated user lacks permission for this operation"},
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication credentials are missing or invalid",
+        },
+        403: {
+            "model": ErrorResponse,
+            "description": "The authenticated user lacks permission for this operation",
+        },
         404: {"model": ErrorResponse, "description": "The requested resource does not exist"},
-        409: {"model": ErrorResponse, "description": "The operation conflicts with the current state"},
+        409: {
+            "model": ErrorResponse,
+            "description": "The operation conflicts with the current state",
+        },
         500: {"model": ErrorResponse, "description": "An unexpected server error occurred"},
     },
 )
 async def delete_sandbox(
     sandbox_id: str,
-    x_request_id: Optional[str] = Header(None, alias="X-Request-ID", description="Unique request identifier for tracing"),
+    x_request_id: Optional[str] = Header(
+        None, alias="X-Request-ID", description="Unique request identifier for tracing"
+    ),
 ) -> Response:
     """
     Delete a sandbox.
@@ -255,21 +300,33 @@ async def delete_sandbox(
 # Sandbox Lifecycle Operations
 # ============================================================================
 
+
 @router.post(
     "/sandboxes/{sandbox_id}/pause",
     status_code=status.HTTP_202_ACCEPTED,
     responses={
         202: {"description": "Pause operation accepted"},
-        401: {"model": ErrorResponse, "description": "Authentication credentials are missing or invalid"},
-        403: {"model": ErrorResponse, "description": "The authenticated user lacks permission for this operation"},
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication credentials are missing or invalid",
+        },
+        403: {
+            "model": ErrorResponse,
+            "description": "The authenticated user lacks permission for this operation",
+        },
         404: {"model": ErrorResponse, "description": "The requested resource does not exist"},
-        409: {"model": ErrorResponse, "description": "The operation conflicts with the current state"},
+        409: {
+            "model": ErrorResponse,
+            "description": "The operation conflicts with the current state",
+        },
         500: {"model": ErrorResponse, "description": "An unexpected server error occurred"},
     },
 )
 async def pause_sandbox(
     sandbox_id: str,
-    x_request_id: Optional[str] = Header(None, alias="X-Request-ID", description="Unique request identifier for tracing"),
+    x_request_id: Optional[str] = Header(
+        None, alias="X-Request-ID", description="Unique request identifier for tracing"
+    ),
 ) -> Response:
     """
     Pause execution while retaining state.
@@ -297,16 +354,27 @@ async def pause_sandbox(
     status_code=status.HTTP_202_ACCEPTED,
     responses={
         202: {"description": "Resume operation accepted"},
-        401: {"model": ErrorResponse, "description": "Authentication credentials are missing or invalid"},
-        403: {"model": ErrorResponse, "description": "The authenticated user lacks permission for this operation"},
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication credentials are missing or invalid",
+        },
+        403: {
+            "model": ErrorResponse,
+            "description": "The authenticated user lacks permission for this operation",
+        },
         404: {"model": ErrorResponse, "description": "The requested resource does not exist"},
-        409: {"model": ErrorResponse, "description": "The operation conflicts with the current state"},
+        409: {
+            "model": ErrorResponse,
+            "description": "The operation conflicts with the current state",
+        },
         500: {"model": ErrorResponse, "description": "An unexpected server error occurred"},
     },
 )
 async def resume_sandbox(
     sandbox_id: str,
-    x_request_id: Optional[str] = Header(None, alias="X-Request-ID", description="Unique request identifier for tracing"),
+    x_request_id: Optional[str] = Header(
+        None, alias="X-Request-ID", description="Unique request identifier for tracing"
+    ),
 ) -> Response:
     """
     Resume a paused sandbox.
@@ -336,17 +404,28 @@ async def resume_sandbox(
     responses={
         200: {"description": "Sandbox expiration updated successfully"},
         400: {"model": ErrorResponse, "description": "The request was invalid or malformed"},
-        401: {"model": ErrorResponse, "description": "Authentication credentials are missing or invalid"},
-        403: {"model": ErrorResponse, "description": "The authenticated user lacks permission for this operation"},
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication credentials are missing or invalid",
+        },
+        403: {
+            "model": ErrorResponse,
+            "description": "The authenticated user lacks permission for this operation",
+        },
         404: {"model": ErrorResponse, "description": "The requested resource does not exist"},
-        409: {"model": ErrorResponse, "description": "The operation conflicts with the current state"},
+        409: {
+            "model": ErrorResponse,
+            "description": "The operation conflicts with the current state",
+        },
         500: {"model": ErrorResponse, "description": "An unexpected server error occurred"},
     },
 )
 async def renew_sandbox_expiration(
     sandbox_id: str,
     request: RenewSandboxExpirationRequest,
-    x_request_id: Optional[str] = Header(None, alias="X-Request-ID", description="Unique request identifier for tracing"),
+    x_request_id: Optional[str] = Header(
+        None, alias="X-Request-ID", description="Unique request identifier for tracing"
+    ),
 ) -> RenewSandboxExpirationResponse:
     """
     Renew sandbox expiration.
@@ -373,14 +452,21 @@ async def renew_sandbox_expiration(
 # Sandbox Endpoints
 # ============================================================================
 
+
 @router.get(
     "/sandboxes/{sandbox_id}/endpoints/{port}",
     response_model=Endpoint,
     response_model_exclude_none=True,
     responses={
         200: {"description": "Endpoint retrieved successfully"},
-        401: {"model": ErrorResponse, "description": "Authentication credentials are missing or invalid"},
-        403: {"model": ErrorResponse, "description": "The authenticated user lacks permission for this operation"},
+        401: {
+            "model": ErrorResponse,
+            "description": "Authentication credentials are missing or invalid",
+        },
+        403: {
+            "model": ErrorResponse,
+            "description": "The authenticated user lacks permission for this operation",
+        },
         404: {"model": ErrorResponse, "description": "The requested resource does not exist"},
         500: {"model": ErrorResponse, "description": "An unexpected server error occurred"},
     },
@@ -390,7 +476,9 @@ async def get_sandbox_endpoint(
     sandbox_id: str,
     port: int,
     use_server_proxy: bool = Query(False, description="Whether to return a server-proxied URL"),
-    x_request_id: Optional[str] = Header(None, alias="X-Request-ID", description="Unique request identifier for tracing"),
+    x_request_id: Optional[str] = Header(
+        None, alias="X-Request-ID", description="Unique request identifier for tracing"
+    ),
 ) -> Endpoint:
     """
     Get sandbox access endpoint.
@@ -428,7 +516,9 @@ async def get_sandbox_endpoint(
     "/sandboxes/{sandbox_id}/proxy/{port}/{full_path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
 )
-async def proxy_sandbox_endpoint_request(request: Request, sandbox_id: str, port: int, full_path: str):
+async def proxy_sandbox_endpoint_request(
+    request: Request, sandbox_id: str, port: int, full_path: str
+):
     """
     Receives all incoming requests, determines the target sandbox from path parameter,
     and asynchronously proxies the request to it.
@@ -451,9 +541,7 @@ async def proxy_sandbox_endpoint_request(request: Request, sandbox_id: str, port
         connection_header = request.headers.get("connection")
         if connection_header:
             hop_by_hop.update(
-                header.strip().lower()
-                for header in connection_header.split(",")
-                if header.strip()
+                header.strip().lower() for header in connection_header.split(",") if header.strip()
             )
         headers = {}
         for key, value in request.headers.items():
@@ -470,7 +558,9 @@ async def proxy_sandbox_endpoint_request(request: Request, sandbox_id: str, port
             url=f"http://{target_host}/{full_path}",
             params=query_string if query_string else None,
             headers=headers,
-            content=request.stream() if request.method in ("POST", "PUT", "PATCH", "DELETE") else None,
+            content=request.stream()
+            if request.method in ("POST", "PUT", "PATCH", "DELETE")
+            else None,
         )
 
         resp = await client.send(req, stream=True)
@@ -479,14 +569,10 @@ async def proxy_sandbox_endpoint_request(request: Request, sandbox_id: str, port
         connection_header = resp.headers.get("connection")
         if connection_header:
             hop_by_hop.update(
-                header.strip().lower()
-                for header in connection_header.split(",")
-                if header.strip()
+                header.strip().lower() for header in connection_header.split(",") if header.strip()
             )
         response_headers = {
-            key: value
-            for key, value in resp.headers.items()
-            if key.lower() not in hop_by_hop
+            key: value for key, value in resp.headers.items() if key.lower() not in hop_by_hop
         }
 
         return StreamingResponse(
@@ -503,6 +589,4 @@ async def proxy_sandbox_endpoint_request(request: Request, sandbox_id: str, port
         # Preserve explicit HTTP exceptions raised above (e.g. websocket upgrade not supported).
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"An internal error occurred in the proxy: {e}"
-        )
+        raise HTTPException(status_code=500, detail=f"An internal error occurred in the proxy: {e}")
