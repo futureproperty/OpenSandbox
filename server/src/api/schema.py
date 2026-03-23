@@ -547,3 +547,51 @@ class ErrorResponse(BaseModel):
         ...,
         description="Human-readable error message describing what went wrong and how to fix it",
     )
+
+
+# ============================================================================
+# Port-Forward Models
+# ============================================================================
+
+class CreatePortForwardRequest(BaseModel):
+    """Request to create a port-forward tunnel to a sandbox Pod."""
+    local_port: int = Field(
+        ...,
+        alias="localPort",
+        ge=1,
+        le=65535,
+        description="Local TCP port on the server to listen on (1-65535)",
+    )
+    remote_port: int = Field(
+        ...,
+        alias="remotePort",
+        ge=1,
+        le=65535,
+        description="Target TCP port on the sandbox Pod (1-65535)",
+    )
+
+    class Config:
+        populate_by_name = True
+
+
+class PortForwardInfo(BaseModel):
+    """Information about an active port-forward tunnel."""
+    sandbox_id: str = Field(..., alias="sandboxId", description="Sandbox identifier")
+    local_port: int = Field(..., alias="localPort", description="Server-side TCP listening port")
+    remote_port: int = Field(..., alias="remotePort", description="Target port on the sandbox Pod")
+    created_at: datetime = Field(..., alias="createdAt", description="Timestamp when port-forward was created")
+
+    class Config:
+        populate_by_name = True
+
+
+class PortForwardListResponse(BaseModel):
+    """List of active port-forward tunnels for a sandbox."""
+    port_forwards: List[PortForwardInfo] = Field(
+        ...,
+        alias="portForwards",
+        description="Active port-forward tunnels",
+    )
+
+    class Config:
+        populate_by_name = True
