@@ -70,6 +70,8 @@ logging.getLogger().setLevel(
 )
 
 from src.api.lifecycle import router  # noqa: E402
+from src.api.port_forward import port_forward_router  # noqa: E402
+import src.api.port_forward as port_forward_module  # noqa: E402
 from src.middleware.auth import AuthMiddleware  # noqa: E402
 from src.middleware.request_id import RequestIdMiddleware  # noqa: E402
 from src.services.runtime_resolver import (  # noqa: E402
@@ -96,9 +98,25 @@ async def lifespan(app: FastAPI):
             logger.info("Validating secure runtime for Docker backend")
         elif runtime_type == "kubernetes":
             from src.services.k8s.client import K8sClient
+            from src.services.k8s.provider_factory import create_workload_provider
+            from src.services.port_forward_service import PortForwardService
 
             k8s_client = K8sClient(app_config.kubernetes)
             logger.info("Validating secure runtime for Kubernetes backend")
+            try:
+                workload_provider = create_workload_provider(
+                    provider_type=app_config.kubernetes.workload_provider,
+                    k8s_client=k8s_client,
+                    app_config=app_config,
+                )
+                port_forward_module.port_forward_service = PortForwardService(
+                    k8s_client=k8s_client,
+                    namespace=app_config.kubernetes.namespace,
+                    workload_provider=workload_provider,
+                )
+                logger.info("PortForwardService initialized")
+            except Exception as pf_exc:
+                logger.warning("Failed to initialize PortForwardService: %s", pf_exc)
 
         await validate_secure_runtime_on_startup(
             app_config,
@@ -112,7 +130,11 @@ async def lifespan(app: FastAPI):
 
     yield
     await app.state.http_client.aclose()
-
+    if port_forward_module.port_forward_service is not None:
+        try:
+            await port_forward_module.port_forward_service.cleanup_all()
+        except Exception as exc:
+            logger.warning("PortForwardService cleanup error: %s", exc)
 
 # Initialize FastAPI application
 app = FastAPI(
@@ -145,6 +167,8 @@ app.add_middleware(RequestIdMiddleware)
 # Include API routes at root and versioned prefix
 app.include_router(router)
 app.include_router(router, prefix="/v1")
+app.include_router(port_forward_router)
+app.include_router(port_forward_router, prefix="/v1")
 
 DEFAULT_ERROR_CODE = "GENERAL::UNKNOWN_ERROR"
 DEFAULT_ERROR_MESSAGE = "An unexpected error occurred."
