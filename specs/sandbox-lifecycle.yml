@@ -384,6 +384,86 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /sandboxes/{sandboxId}/port-forwards:
+    post:
+      tags: [Sandboxes]
+      summary: Create a port-forward tunnel
+      description: |
+        Create a TCP port-forward tunnel from a server-side local port to a target port
+        on the sandbox Pod. Only supported for Kubernetes runtime.
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PortForwardRequest'
+      responses:
+        '201':
+          description: Port-forward created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortForwardInfo'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestId'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '501':
+          description: Not implemented for this runtime
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      tags: [Sandboxes]
+      summary: List port-forwards for a sandbox
+      description: List all active port-forward tunnels for a sandbox.
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+      responses:
+        '200':
+          description: Port-forwards retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortForwardListResponse'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /sandboxes/{sandboxId}/port-forwards/{localPort}:
+    delete:
+      tags: [Sandboxes]
+      summary: Delete a port-forward tunnel
+      description: Close and remove a specific port-forward tunnel by its local port.
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - $ref: '#/components/parameters/LocalPort'
+      responses:
+        '204':
+          description: Port-forward deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 components:
   securitySchemes:
     apiKeyAuth:
@@ -402,6 +482,15 @@ components:
       description: Unique sandbox identifier
       schema:
         type: string
+    LocalPort:
+      name: localPort
+      in: path
+      required: true
+      description: Local TCP port number of the port-forward tunnel
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 65535
   headers:
     XRequestId:
       description: Unique request identifier for tracing
@@ -846,6 +935,49 @@ components:
           type: string
           description: Human-readable error message describing what went wrong and how to fix it.
       required: [code, message]
+      additionalProperties: false
+    PortForwardRequest:
+      type: object
+      required: [localPort, remotePort]
+      properties:
+        localPort:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Local TCP port on the server to listen on (1-65535)
+        remotePort:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Target TCP port on the sandbox Pod (1-65535)
+      additionalProperties: false
+    PortForwardInfo:
+      type: object
+      required: [sandboxId, localPort, remotePort, createdAt]
+      properties:
+        sandboxId:
+          type: string
+          description: Sandbox identifier
+        localPort:
+          type: integer
+          description: Server-side TCP listening port
+        remotePort:
+          type: integer
+          description: Target port on the sandbox Pod
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp when port-forward was created
+      additionalProperties: false
+    PortForwardListResponse:
+      type: object
+      required: [portForwards]
+      properties:
+        portForwards:
+          type: array
+          items:
+            $ref: '#/components/schemas/PortForwardInfo'
+          description: Active port-forward tunnels
       additionalProperties: false
     Endpoint:
       type: object
