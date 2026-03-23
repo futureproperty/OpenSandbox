@@ -390,6 +390,63 @@ metrics = await sandbox.get_metrics()
 print(f"CPU: {metrics.cpu_used_in_percent}%, Memory: {metrics.memory_used_in_mib}MB")
 ```
 
+## 6. Port Forwarding (Kubernetes Only)
+
+Port-forward creates a TCP tunnel from a server-side local port to a port inside the sandbox Pod.
+This is useful when you need to access services running in a K8s sandbox that aren't exposed via ingress.
+
+> **Runtime limitation**: Port-forward is only available for the Kubernetes runtime.
+> Docker runtime returns `501 Not Implemented`. The Python SDK does not have port-forward methods yet
+> — use the REST API directly.
+
+### Create a port-forward
+
+```bash
+curl -X POST "http://$DOMAIN/v1/sandboxes/$SANDBOX_ID/port-forwards" \
+  -H "OPEN-SANDBOX-API-KEY: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "localPort": 9000,
+    "remotePort": 8080
+  }'
+# Response: {"sandboxId": "...", "localPort": 9000, "remotePort": 8080, "createdAt": "..."}
+```
+
+After creation, traffic to `127.0.0.1:9000` on the server is tunneled to port `8080` inside the sandbox Pod.
+
+### List active port-forwards
+
+```bash
+curl "http://$DOMAIN/v1/sandboxes/$SANDBOX_ID/port-forwards" \
+  -H "OPEN-SANDBOX-API-KEY: $API_KEY"
+# Response: {"portForwards": [{"sandboxId": "...", "localPort": 9000, "remotePort": 8080, "createdAt": "..."}]}
+```
+
+### Delete a port-forward
+
+```bash
+curl -X DELETE "http://$DOMAIN/v1/sandboxes/$SANDBOX_ID/port-forwards/9000" \
+  -H "OPEN-SANDBOX-API-KEY: $API_KEY"
+# 204 No Content — tunnel closed, active connections terminated
+```
+
+### Port-forward parameters
+
+| Parameter | Type | Range | Description |
+|-----------|------|-------|-------------|
+| `localPort` | int | 1-65535 | Server-side TCP port to listen on. Must not conflict with other port-forwards. |
+| `remotePort` | int | 1-65535 | Target port inside the sandbox Pod |
+
+### Port-forward vs get_endpoint
+
+| | `get_endpoint(port)` | Port-forward |
+|---|---|---|
+| **How** | Returns routable address via ingress | Creates TCP tunnel on the server |
+| **Runtime** | Docker + K8s | K8s only |
+| **Access from** | Anywhere (if ingress configured) | Server localhost only (`127.0.0.1`) |
+| **Use when** | Client can reach ingress/bridge | Client is on the server, or no ingress available |
+| **SDK support** | `await sandbox.get_endpoint(port)` | REST API only (no SDK method yet) |
+
 ---
 
 ## Complete Example: Run Python Code in a Sandbox
@@ -492,6 +549,9 @@ All endpoints are under `/v1` prefix. Auth header: `OPEN-SANDBOX-API-KEY: <key>`
 | `POST` | `/v1/sandboxes/{id}/resume` | Resume sandbox |
 | `POST` | `/v1/sandboxes/{id}/renew-expiration` | Extend TTL |
 | `GET` | `/v1/sandboxes/{id}/endpoints/{port}` | Get network endpoint |
+| `POST` | `/v1/sandboxes/{id}/port-forwards` | Create port-forward tunnel (K8s only) |
+| `GET` | `/v1/sandboxes/{id}/port-forwards` | List port-forwards |
+| `DELETE` | `/v1/sandboxes/{id}/port-forwards/{localPort}` | Delete port-forward |
 
 The execd daemon (port 44772 inside the sandbox) handles command execution and file
 operations — the SDK wraps this for you. If you need direct access:

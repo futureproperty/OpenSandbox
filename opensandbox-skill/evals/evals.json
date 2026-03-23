@@ -18,6 +18,12 @@
       "prompt": "我不想用 Python SDK，直接用 curl 调 OpenSandbox 的 REST API。帮我写一个完整的 bash 脚本：创建一个 sandbox，在里面跑 echo hello world，拿到输出，最后删掉 sandbox。",
       "expected_output": "A bash script using curl that: (1) POST /v1/sandboxes to create with correct JSON body (image, entrypoint, timeout, resourceLimits), (2) extracts sandbox_id from response, (3) uses the execd API or SDK proxy to run a command, (4) captures output, (5) DELETE /v1/sandboxes/{id} to clean up. Should use correct auth header OPEN-SANDBOX-API-KEY.",
       "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "我在 K8s 上跑了一个 OpenSandbox，sandbox 里有个 web 服务跑在 8080 端口，但是没有配置 ingress。我想从 server 本地访问这个服务，帮我用 port-forward 功能把 sandbox 里的 8080 映射到 server 的 9000 端口，然后验证能不能访问，最后清理掉。",
+      "expected_output": "A script or step-by-step guide that: (1) uses POST /v1/sandboxes/{id}/port-forwards with localPort=9000, remotePort=8080, (2) accesses the service via curl http://127.0.0.1:9000, (3) lists port-forwards with GET to verify, (4) deletes with DELETE /v1/sandboxes/{id}/port-forwards/9000. Should note K8s-only limitation and use correct auth header.",
+      "files": []
     }
   ]
 }
