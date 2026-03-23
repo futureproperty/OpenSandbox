@@ -171,6 +171,30 @@ class TestPortForwardService:
         assert service._registry == {}
 
     @pytest.mark.asyncio
+    async def test_delete_port_forward_closes_active_connections(self, mock_k8s_client, mock_workload_provider):
+        service = PortForwardService(mock_k8s_client, "default", mock_workload_provider)
+        mock_server = make_mock_server()
+
+        with patch("src.services.port_forward_service.asyncio.start_server", new=AsyncMock(return_value=mock_server)):
+            await service.create_port_forward("sandbox-test-123", 9090, 44772)
+
+        # Simulate two active connections in the state
+        writer_a = MagicMock()
+        writer_a.close = MagicMock()
+        writer_a.wait_closed = AsyncMock()
+        writer_b = MagicMock()
+        writer_b.close = MagicMock()
+        writer_b.wait_closed = AsyncMock()
+        state = service._registry["sandbox-test-123"][9090]
+        state.active_connections.update({writer_a, writer_b})
+
+        await service.delete_port_forward("sandbox-test-123", 9090)
+
+        # Both active connections must have been closed
+        writer_a.close.assert_called_once_with()
+        writer_b.close.assert_called_once_with()
+
+    @pytest.mark.asyncio
     async def test_cleanup_sandbox_removes_all_port_forwards_for_sandbox(self, mock_k8s_client, mock_workload_provider):
         service = PortForwardService(mock_k8s_client, "default", mock_workload_provider)
         server_one = make_mock_server()
