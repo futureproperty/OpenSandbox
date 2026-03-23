@@ -18,6 +18,7 @@ from fastapi import status
 from fastapi.exceptions import HTTPException
 from fastapi.testclient import TestClient
 
+from src.api import lifecycle
 from src.api import port_forward
 from src.api.port_forward import port_forward_router
 from src.api.schema import PortForwardInfo, PortForwardListResponse
@@ -209,3 +210,48 @@ def test_requires_auth(client: TestClient) -> None:
         json={"localPort": 9090, "remotePort": 44772},
     )
     assert resp.status_code == 401
+
+
+def test_sandbox_deletion_cleans_port_forwards(
+    client: TestClient,
+    auth_headers: dict,
+    monkeypatch,
+) -> None:
+    cleanup_calls: list = []
+
+    class TrackingPortForwardService:
+        async def cleanup_sandbox(self, sandbox_id: str) -> None:
+            cleanup_calls.append(sandbox_id)
+
+    class StubSandboxService:
+        @staticmethod
+        def delete_sandbox(sandbox_id: str) -> None:
+            pass
+
+    monkeypatch.setattr(port_forward, "port_forward_service", TrackingPortForwardService())
+    monkeypatch.setattr(lifecycle, "sandbox_service", StubSandboxService())
+
+    resp = client.delete("/v1/sandboxes/sbx-001", headers=auth_headers)
+    assert resp.status_code == 204
+    assert cleanup_calls == ["sbx-001"]
+
+
+def test_sandbox_deletion_succeeds_even_if_cleanup_fails(
+    client: TestClient,
+    auth_headers: dict,
+    monkeypatch,
+) -> None:
+    class FailingPortForwardService:
+        async def cleanup_sandbox(self, sandbox_id: str) -> None:
+            raise RuntimeError("cleanup failed")
+
+    class StubSandboxService:
+        @staticmethod
+        def delete_sandbox(sandbox_id: str) -> None:
+            pass
+
+    monkeypatch.setattr(port_forward, "port_forward_service", FailingPortForwardService())
+    monkeypatch.setattr(lifecycle, "sandbox_service", StubSandboxService())
+
+    resp = client.delete("/v1/sandboxes/sbx-001", headers=auth_headers)
+    assert resp.status_code == 204

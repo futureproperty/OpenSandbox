@@ -40,6 +40,9 @@ from src.api.schema import (
     SandboxFilter,
 )
 from src.services.factory import create_sandbox_service
+import logging
+
+import src.api.port_forward as port_forward_module
 
 # RFC 2616 Section 13.5.1
 HOP_BY_HOP_HEADERS = {
@@ -237,8 +240,14 @@ async def delete_sandbox(
     Raises:
         HTTPException: If sandbox not found or deletion fails
     """
-    # Delegate to the service layer for deletion
     sandbox_service.delete_sandbox(sandbox_id)
+    if port_forward_module.port_forward_service is not None:
+        try:
+            await port_forward_module.port_forward_service.cleanup_sandbox(sandbox_id)
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "Port-forward cleanup skipped for sandbox %s", sandbox_id
+            )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
